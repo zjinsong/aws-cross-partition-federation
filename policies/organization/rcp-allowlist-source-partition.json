@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowlistGlobalPartition",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "aws:FederatedProvider": "arn:*:iam::*:oidc-provider/*.tokens.sts.*"
+        },
+        "StringNotLike": {
+          "aws:FederatedProvider": [
+            "arn:*:iam::*:oidc-provider/*.tokens.sts.global.api.aws"
+          ]
+        }
+      }
+    }
+  ]
+}

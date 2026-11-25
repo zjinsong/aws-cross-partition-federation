@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOwnRoleOnly",
+      "Effect": "Allow",
+      "Action": "iam:GetRole",
+      "Resource": "arn:aws:iam::${GL_ACCOUNT_ID}:role/${TARGET_ROLE}"
+    }
+  ]
+}

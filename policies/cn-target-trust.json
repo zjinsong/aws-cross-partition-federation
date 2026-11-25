@@ -1,0 +1,20 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowGlobalCallerRole",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws-cn:iam::${CN_ACCOUNT_ID}:oidc-provider/${GL_ISSUER_HOST}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "${GL_ISSUER_HOST}:sub": "arn:aws:iam::${GL_ACCOUNT_ID}:role/${CALLER_ROLE}",
+          "${GL_ISSUER_HOST}:aud": "${AUDIENCE}",
+          "${GL_ISSUER_HOST}:source_region": "${GL_REGION}"
+        }
+      }
+    }
+  ]
+}

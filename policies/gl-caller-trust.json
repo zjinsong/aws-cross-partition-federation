@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowDemoPrincipalToAssume",
+      "Effect": "Allow",
+      "Principal": { "AWS": "${GL_CALLER_PRINCIPAL}" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}

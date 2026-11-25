@@ -1,0 +1,5 @@
+config.env
+.out/
+__pycache__/
+*.log
+seed.txt

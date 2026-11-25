@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowTokensForCrossPartition",
+      "Effect": "Allow",
+      "Action": "sts:GetWebIdentityToken",
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringEquals": { "sts:IdentityTokenAudience": "${AUDIENCE}" },
+        "Null": { "sts:IdentityTokenAudience": "false" },
+        "NumericLessThanEquals": { "sts:DurationSeconds": ${TOKEN_DURATION} },
+        "StringEquals": { "sts:SigningAlgorithm": "ES384" }
+      }
+    }
+  ]
+}

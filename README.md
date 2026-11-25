@@ -8,6 +8,84 @@
 
 > **重要：** 中国区和 Global 之间的访问可能涉及数据出境。实施前请与合规团队确认方案符合相关法规要求。
 
+## 仓库内容
+
+```
+.
+├── README.md
+├── config.env.example                  # 配置模板，复制为 config.env 后填写
+├── policies/                           # 策略模板，${VAR} 由脚本按 config.env 替换
+│   ├── caller-token-policy.json        # CrossPartitionCaller 权限（两端共用）
+│   ├── cn-caller-trust.json            # 中国区 CrossPartitionCaller trust policy
+│   ├── gl-caller-trust.json            # Global CrossPartitionCaller trust policy
+│   ├── cn-target-trust.json            # 中国区 CrossPartitionTarget trust policy（信任 Global issuer）
+│   ├── gl-target-trust.json            # Global CrossPartitionTarget trust policy（信任中国区 issuer）
+│   ├── cn-target-permissions.json      # 中国区 CrossPartitionTarget 权限（指定 S3 存储桶）
+│   ├── gl-target-permissions.json      # Global CrossPartitionTarget 权限（iam:GetRole 自身）
+│   └── organization/                   # RCP / SCP 示例
+│       ├── rcp-allowlist-source-partition.json
+│       ├── rcp-allowlist-issuer.json
+│       ├── scp-deny-source-region.json
+│       ├── scp-deny-source-issuer.json
+│       └── scp-deny-source-partition.json
+├── scripts/
+│   ├── lib.sh                          # 公共函数
+│   ├── 01-setup.sh                     # 创建两端资源，可重复执行
+│   ├── 02-test.sh                      # 双向访问测试和负向用例
+│   ├── 03-audit.sh                     # 查询两端 CloudTrail 并按 token ID 关联
+│   └── 04-cleanup.sh                   # 删除全部资源
+└── examples/
+    ├── cross_partition_session.py      # boto3 自动刷新凭证示例
+    └── requirements.txt
+```
+
+## 快速开始
+
+依赖：AWS CLI v2、jq、envsubst（gettext）。Python 示例需要 boto3 1.40 或更高版本。
+
+```bash
+git clone https://github.com/zjinsong/aws-cross-partition-federation.git
+cd aws-cross-partition-federation
+
+cp config.env.example config.env
+vi config.env            # 填写两个账号的 profile、账号 ID、CLI 身份和存储桶名
+
+./scripts/01-setup.sh    # 开启联邦，创建角色、OIDC provider 和存储桶
+./scripts/02-test.sh     # 运行双向测试和负向用例
+./scripts/03-audit.sh    # 几分钟后查看 CloudTrail 关联结果
+./scripts/04-cleanup.sh  # 测试结束后删除资源
+```
+
+`02-test.sh` 的输出摘要：
+
+```
+==> 方向 1：Global (us-east-1) → 中国区 (cn-northwest-1)，访问 S3
+[PASS] 落地身份 arn:aws-cn:sts::111122223333:assumed-role/CrossPartitionTarget/from-global
+[PASS] s3 ls
+[PASS] s3 get seed.txt
+[PASS] s3 put from-global.txt
+[PASS] 越权: 列出所有存储桶 → AccessDenied
+
+==> 方向 2：中国区 (cn-northwest-1) → Global (us-east-1)，调用 STS/IAM
+[PASS] 落地身份 arn:aws:sts::444455556666:assumed-role/CrossPartitionTarget/from-china
+[PASS] iam get-role
+[PASS] 越权: iam list-roles → AccessDenied
+
+==> 负向用例
+[PASS] 源端: 申请非约定 audience → AccessDenied
+[PASS] 源端: 申请超过上限的时长 (900s) → AccessDenied
+[PASS] 目标端: source_region 不匹配 → AccessDenied
+[PASS] 目标端: 换取未信任该 provider 的角色 → AccessDenied
+[PASS] 同一 partition 内交换 → InvalidIdentityToken
+
+==> 结果
+[PASS] 全部用例通过
+```
+
+Global 侧只创建 IAM 资源，落地后只调用 STS 和 IAM，不产生费用。中国区侧会产生少量 S3 请求和存储费用。
+
+下文逐步说明脚本所做的每一项配置。
+
 ## 背景
 
 Global（`aws`）和中国区（`aws-cn`）是两个相互隔离的 partition，各自运行独立的 IAM。一个 partition 签发的凭证在另一个 partition 中无效，因此 `sts:AssumeRole` 不能跨 partition 使用，资源策略也无法引用另一个 partition 的 principal。
@@ -147,7 +225,7 @@ BUCKET=<your-china-bucket>
 
 1. 创建 trust policy。演示中允许 CLI 使用的 IAM 身份 assume 这个角色。生产环境中，请改为工作负载所用的服务主体，例如 `"Service": "ec2.amazonaws.com"`。
 
-   `cn-caller-trust.json`
+   `policies/cn-caller-trust.json`
 
    ```json
    {
@@ -162,11 +240,11 @@ BUCKET=<your-china-bucket>
    }
    ```
 
-   `gl-caller-trust.json` 的结构相同，principal 改为 `arn:aws:iam::444455556666:user/<your-cli-user>`。
+   `policies/gl-caller-trust.json` 的结构相同，principal 改为 `arn:aws:iam::444455556666:user/<your-cli-user>`。
 
 2. 创建权限策略。这份策略两个账号共用，只允许申请 audience 为 `cross-partition-test`、时长不超过 300 秒、算法为 ES384 的 token。
 
-   `token-policy.json`
+   `policies/caller-token-policy.json`
 
    ```json
    {
@@ -192,19 +270,19 @@ BUCKET=<your-china-bucket>
    ```bash
    aws iam create-role --profile ChinaCredentials \
      --role-name CrossPartitionCaller \
-     --assume-role-policy-document file://cn-caller-trust.json
+     --assume-role-policy-document file://policies/cn-caller-trust.json
    aws iam put-role-policy --profile ChinaCredentials \
      --role-name CrossPartitionCaller \
      --policy-name AllowGetWebIdentityToken \
-     --policy-document file://token-policy.json
+     --policy-document file://policies/caller-token-policy.json
 
    aws iam create-role --profile GlobalCredentials \
      --role-name CrossPartitionCaller \
-     --assume-role-policy-document file://gl-caller-trust.json
+     --assume-role-policy-document file://policies/gl-caller-trust.json
    aws iam put-role-policy --profile GlobalCredentials \
      --role-name CrossPartitionCaller \
      --policy-name AllowGetWebIdentityToken \
-     --policy-document file://token-policy.json
+     --policy-document file://policies/caller-token-policy.json
    ```
 
 ### 步骤 3：在每个账号中注册对端 issuer
@@ -229,7 +307,7 @@ aws iam create-open-id-connect-provider --profile GlobalCredentials \
 
 1. 创建 trust policy。目标角色信任对端的 OIDC provider，并同时校验 `sub`、`aud` 和 `source_region`。条件键的前缀是不带 `https://` 的 issuer 主机名。
 
-   `cn-target-trust.json`（中国区，接收来自 Global 的请求）
+   `policies/cn-target-trust.json`（中国区，接收来自 Global 的请求）
 
    ```json
    {
@@ -253,7 +331,7 @@ aws iam create-open-id-connect-provider --profile GlobalCredentials \
    }
    ```
 
-   `gl-target-trust.json`（Global，接收来自中国区的请求）
+   `policies/gl-target-trust.json`（Global，接收来自中国区的请求）
 
    ```json
    {
@@ -281,7 +359,7 @@ aws iam create-open-id-connect-provider --profile GlobalCredentials \
 
 2. 创建权限策略。中国区角色只能访问指定的存储桶，Global 角色只能读取自身信息。
 
-   `cn-target-perm.json`
+   `policies/cn-target-permissions.json`
 
    ```json
    {
@@ -301,7 +379,7 @@ aws iam create-open-id-connect-provider --profile GlobalCredentials \
    }
    ```
 
-   `gl-target-perm.json`
+   `policies/gl-target-permissions.json`
 
    ```json
    {
@@ -321,19 +399,19 @@ aws iam create-open-id-connect-provider --profile GlobalCredentials \
    ```bash
    aws iam create-role --profile ChinaCredentials \
      --role-name CrossPartitionTarget \
-     --assume-role-policy-document file://cn-target-trust.json
+     --assume-role-policy-document file://policies/cn-target-trust.json
    aws iam put-role-policy --profile ChinaCredentials \
      --role-name CrossPartitionTarget \
      --policy-name S3BucketAccess \
-     --policy-document file://cn-target-perm.json
+     --policy-document file://policies/cn-target-permissions.json
 
    aws iam create-role --profile GlobalCredentials \
      --role-name CrossPartitionTarget \
-     --assume-role-policy-document file://gl-target-trust.json
+     --assume-role-policy-document file://policies/gl-target-trust.json
    aws iam put-role-policy --profile GlobalCredentials \
      --role-name CrossPartitionTarget \
      --policy-name SelfGetRole \
-     --policy-document file://gl-target-perm.json
+     --policy-document file://policies/gl-target-permissions.json
    ```
 
 ### 步骤 5：方向 1，从 Global 访问中国区 S3
@@ -472,6 +550,43 @@ arn:aws:sts::444455556666:assumed-role/CrossPartitionTarget/from-china
 ```
 
 中国区签发的 JWT 中，`iss` 为 `https://<cn-issuer-id>.tokens.sts.global.api.amazonwebservices.com.cn`，`source_region` 为 `cn-northwest-1`，其他字段的结构与方向 1 相同。
+
+### 在应用中使用（boto3）
+
+长期运行的服务需要在凭证过期前重新申请 JWT 并换取凭证。[`examples/cross_partition_session.py`](examples/cross_partition_session.py) 中的 `cross_partition_session()` 返回一个 boto3 Session，它使用 `DeferredRefreshableCredentials` 自动完成刷新：
+
+```python
+from cross_partition_session import cross_partition_session
+
+session = cross_partition_session(
+    role_arn="arn:aws-cn:iam::111122223333:role/CrossPartitionTarget",
+    audience="cross-partition-test",
+    source_region="us-east-1",
+    dest_region="cn-northwest-1",
+)
+print(session.client("sts").get_caller_identity()["Arn"])
+session.client("s3").list_objects_v2(Bucket="<your-china-bucket>")
+```
+
+命令行运行：
+
+```bash
+pip install -r examples/requirements.txt
+python examples/cross_partition_session.py \
+  --source-region us-east-1 --dest-region cn-northwest-1 \
+  --role-arn arn:aws-cn:iam::111122223333:role/CrossPartitionTarget \
+  --bucket <your-china-bucket>
+```
+
+输出：
+
+```
+对端身份: arn:aws-cn:sts::111122223333:assumed-role/CrossPartitionTarget/cross-partition-session
+  from-global.txt	44
+  seed.txt	38
+```
+
+`sts.get_web_identity_token` 需要 boto3 1.40 或更高版本。
 
 ## 验证访问控制
 
@@ -642,6 +757,8 @@ aws cloudtrail lookup-events --profile ChinaCredentials --region cn-northwest-1 
 ```
 
 ## 清理资源
+
+运行 `./scripts/04-cleanup.sh`，输入 `yes` 确认。脚本执行的命令如下：
 
 ```bash
 # 中国区

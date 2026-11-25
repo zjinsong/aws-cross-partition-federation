@@ -1,0 +1,20 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowChinaCallerRole",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::${GL_ACCOUNT_ID}:oidc-provider/${CN_ISSUER_HOST}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "${CN_ISSUER_HOST}:sub": "arn:aws-cn:iam::${CN_ACCOUNT_ID}:role/${CALLER_ROLE}",
+          "${CN_ISSUER_HOST}:aud": "${AUDIENCE}",
+          "${CN_ISSUER_HOST}:source_region": "${CN_REGION}"
+        }
+      }
+    }
+  ]
+}

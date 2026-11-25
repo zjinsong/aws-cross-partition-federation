@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenySessionsFromIssuer",
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "aws:FederatedProvider": "arn:aws-cn:iam::*:oidc-provider/<global-issuer-id>.tokens.sts.global.api.aws"
+        }
+      }
+    }
+  ]
+}
